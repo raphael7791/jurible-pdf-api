@@ -1,263 +1,176 @@
-const { PDFDocument, rgb, StandardFonts } = require('pdf-lib');
+const { PDFDocument, rgb } = require('pdf-lib');
 const fontkit = require('@pdf-lib/fontkit');
 const fs = require('fs');
 const path = require('path');
 
-module.exports = async function handler(req, res) {
-  // CORS
-  res.setHeader('Access-Control-Allow-Origin', '*');
-  res.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS');
-  res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
-  if (req.method === 'OPTIONS') return res.status(200).end();
-  if (req.method !== 'POST') return res.status(405).json({ error: 'POST only' });
+module.exports = async (req, res) => {
+  if (req.method !== 'POST') {
+    return res.status(405).json({ error: 'POST only' });
+  }
 
   try {
-    const { matiere, fiches, copyrightPdf } = req.body;
+    const { fiches, copyright, coverture, matiere } = req.body;
 
-    if (!fiches || !fiches.length) {
-      return res.status(400).json({ error: 'Aucune fiche fournie' });
+    // --- Police Poppins ---
+    const fontBytes = fs.readFileSync(path.join(__dirname, '..', 'fonts', 'Poppins-SemiBold.ttf'));
+    const finalDoc = await PDFDocument.create();
+    finalDoc.registerFontkit(fontkit);
+    const poppins = await finalDoc.embedFont(fontBytes);
+
+    // --- Couleurs ---
+    const VERT       = rgb(0.04, 0.60, 0.47);
+    const NOIR       = rgb(0.10, 0.10, 0.10);
+    const GRIS       = rgb(0.29, 0.29, 0.29);
+    const GRIS_CLAIR = rgb(0.85, 0.85, 0.85);
+    const BLANC      = rgb(1, 1, 1);
+
+    // =============================================
+    // 1. COUVERTURE
+    // =============================================
+    console.log('Couverture reçue :', coverture ? coverture.length : 'null');
+    if (coverture && coverture.length > 0) {
+      const imgBytes = Buffer.from(coverture, 'base64');
+      const isPng = imgBytes[0] === 0x89 && imgBytes[1] === 0x50;
+      const img = isPng ? await finalDoc.embedPng(imgBytes) : await finalDoc.embedJpg(imgBytes);
+      const p = finalDoc.addPage([595.28, 841.89]);
+      p.drawImage(img, { x: 0, y: 0, width: 595.28, height: 841.89 });
     }
 
-    // Charger la police Poppins
-    let poppinsBytes;
-    try {
-      const fontPath = path.join(process.cwd(), 'fonts', 'Poppins-SemiBold.ttf');
-      poppinsBytes = fs.readFileSync(fontPath);
-    } catch (e) {
-      poppinsBytes = null;
+    // =============================================
+    // 2. COPYRIGHT
+    // =============================================
+    if (copyright) {
+      const cpDoc = await PDFDocument.load(Buffer.from(copyright, 'base64'));
+      const pages = await finalDoc.copyPages(cpDoc, cpDoc.getPageIndices());
+      pages.forEach(p => finalDoc.addPage(p));
     }
 
-    // ===== ÉTAPE 1: Fusionner copyright + toutes les fiches =====
-    const mergedDoc = await PDFDocument.create();
-    mergedDoc.registerFontkit(fontkit);
+    // =============================================
+    // 3. SOMMAIRE (page vide pour l'instant)
+    // =============================================
+    const sommaireIdx = finalDoc.getPageCount();
+    const sommairePage = finalDoc.addPage([595.28, 841.89]);
 
-    // Ajouter la page copyright
-    if (copyrightPdf) {
-      const copyrightDoc = await PDFDocument.load(Buffer.from(copyrightPdf, 'base64'));
-      const copyrightPages = await mergedDoc.copyPages(copyrightDoc, copyrightDoc.getPageIndices());
-      copyrightPages.forEach(p => mergedDoc.addPage(p));
-    }
-
-    // Placeholder pour le sommaire (on l'ajoutera après)
-    // On note la page de début de chaque fiche
+    // =============================================
+    // 4. FICHES
+    // =============================================
     const ficheStartPages = [];
-    const sommairePagesCount = Math.ceil(fiches.length / 25); // estimation: 25 fiches par page de sommaire
-    
-    // Ajouter des pages vides pour le sommaire (on les remplira après)
-    const sommaireStartPage = mergedDoc.getPageCount();
-    for (let i = 0; i < sommairePagesCount; i++) {
-      mergedDoc.addPage([595.28, 841.89]); // A4
+    for (const fiche of fiches) {
+      ficheStartPages.push(finalDoc.getPageCount() + 1);
+      const ficheDoc = await PDFDocument.load(Buffer.from(fiche.pdf, 'base64'));
+      const pages = await finalDoc.copyPages(ficheDoc, ficheDoc.getPageIndices());
+      pages.forEach(p => finalDoc.addPage(p));
     }
 
-    // Ajouter chaque fiche
-    for (let i = 0; i < fiches.length; i++) {
-      const ficheData = fiches[i];
-      const ficheDoc = await PDFDocument.load(Buffer.from(ficheData.pdf, 'base64'));
-      const startPage = mergedDoc.getPageCount();
-      ficheStartPages.push({
-        titre: ficheData.titre,
-        theme: ficheData.theme,
-        page: startPage + 1 // numéro de page (1-indexed)
-      });
-      const pages = await mergedDoc.copyPages(ficheDoc, ficheDoc.getPageIndices());
-      pages.forEach(p => mergedDoc.addPage(p));
-    }
+    // =============================================
+    // 5. HEADER / FOOTER sur les pages des fiches
+    // =============================================
+    const totalPages = finalDoc.getPageCount();
+    const premiereFiche = sommaireIdx + 1;
 
-    // ===== ÉTAPE 2: Remplir le sommaire =====
-    const totalPages = mergedDoc.getPageCount();
-    
-    // Charger la police
-    let font;
-    try {
-      if (poppinsBytes) {
-        font = await mergedDoc.embedFont(poppinsBytes);
-      } else {
-        throw new Error('fallback');
-      }
-    } catch (e) {
-      font = await mergedDoc.embedFont(StandardFonts.HelveticaBold);
-    }
-
-    // Dessiner le sommaire
-    const sommairePages = [];
-    for (let i = 0; i < sommairePagesCount; i++) {
-      sommairePages.push(mergedDoc.getPage(sommaireStartPage + i));
-    }
-
-    let currentSommairePage = 0;
-    let yPos = 750;
-    const pageWidth = 595.28;
-    const marginLeft = 60;
-    const marginRight = 60;
-    const usableWidth = pageWidth - marginLeft - marginRight;
-
-    // Titre du sommaire
-    const titleText = 'SOMMAIRE';
-    const titleWidth = font.widthOfTextAtSize(titleText, 22);
-    sommairePages[0].drawText(titleText, {
-      x: (pageWidth - titleWidth) / 2,
-      y: yPos,
-      size: 22,
-      font: font,
-      color: rgb(0.1, 0.1, 0.1)
-    });
-    yPos -= 15;
-
-    // Ligne sous le titre
-    sommairePages[0].drawLine({
-      start: { x: marginLeft, y: yPos },
-      end: { x: pageWidth - marginRight, y: yPos },
-      thickness: 1.5,
-      color: rgb(0.1, 0.1, 0.1)
-    });
-    yPos -= 35;
-
-    let currentTheme = '';
-
-    for (let i = 0; i < ficheStartPages.length; i++) {
-      const fiche = ficheStartPages[i];
-      const sp = sommairePages[currentSommairePage];
-
-      // Nouveau thème
-      if (fiche.theme && fiche.theme !== currentTheme) {
-        currentTheme = fiche.theme;
-        if (yPos < 80) {
-          currentSommairePage++;
-          if (currentSommairePage >= sommairePages.length) break;
-          yPos = 780;
-        }
-        
-        sommairePages[currentSommairePage].drawText(currentTheme, {
-          x: marginLeft,
-          y: yPos,
-          size: 12,
-          font: font,
-          color: rgb(0, 0.56, 0.32) // vert #009051
-        });
-        yPos -= 8;
-        sommairePages[currentSommairePage].drawLine({
-          start: { x: marginLeft, y: yPos },
-          end: { x: pageWidth - marginRight, y: yPos },
-          thickness: 0.5,
-          color: rgb(0, 0.56, 0.32)
-        });
-        yPos -= 20;
-      }
-
-      if (yPos < 80) {
-        currentSommairePage++;
-        if (currentSommairePage >= sommairePages.length) break;
-        yPos = 780;
-      }
-
-      // Titre de la fiche + numéro de page avec pointillés
-      const ficheTitle = fiche.titre.length > 65 
-        ? fiche.titre.substring(0, 62) + '...' 
-        : fiche.titre;
-      const pageNum = String(fiche.page);
-      const titleW = font.widthOfTextAtSize(ficheTitle, 10);
-      const pageNumW = font.widthOfTextAtSize(pageNum, 10);
-      const dotsWidth = usableWidth - titleW - pageNumW - 10;
-      const dotChar = '.';
-      const dotW = font.widthOfTextAtSize(dotChar, 10);
-      const numDots = Math.max(0, Math.floor(dotsWidth / dotW));
-      const dots = dotChar.repeat(numDots);
-
-      sommairePages[currentSommairePage].drawText(ficheTitle, {
-        x: marginLeft,
-        y: yPos,
-        size: 10,
-        font: font,
-        color: rgb(0.1, 0.1, 0.1)
-      });
-
-      sommairePages[currentSommairePage].drawText(dots, {
-        x: marginLeft + titleW + 5,
-        y: yPos,
-        size: 10,
-        font: font,
-        color: rgb(0.7, 0.7, 0.7)
-      });
-
-      sommairePages[currentSommairePage].drawText(pageNum, {
-        x: pageWidth - marginRight - pageNumW,
-        y: yPos,
-        size: 10,
-        font: font,
-        color: rgb(0.1, 0.1, 0.1)
-      });
-
-      yPos -= 22;
-    }
-
-    // ===== ÉTAPE 3: Header et Footer sur chaque page =====
-    const headerText = `Fiches de révision • ${matiere || 'Matière'}`;
-    const year = new Date().getFullYear();
-    const footerBase = `© ${year} • Jurible.com – Toute reproduction, même partielle, est interdite`;
-
-    const allPages = mergedDoc.getPages();
-    for (let i = 0; i < allPages.length; i++) {
-      const page = allPages[i];
+    for (let i = premiereFiche; i < totalPages; i++) {
+      const page = finalDoc.getPage(i);
       const { width, height } = page.getSize();
+      const pageNum = i + 1;
 
-      // Skip la page copyright (page 0)
-      if (i === 0 && copyrightPdf) continue;
-
-      // Header (centré, italique-like via la police)
-      const headerW = font.widthOfTextAtSize(headerText, 8);
-      page.drawText(headerText, {
-        x: (width - headerW) / 2,
-        y: height - 30,
-        size: 8,
-        font: font,
-        color: rgb(0.5, 0.5, 0.5)
+      // Header vert
+      page.drawRectangle({ x: 0, y: height - 36, width, height: 36, color: VERT });
+      page.drawText('Jurible — ' + matiere, {
+        x: 20, y: height - 24, size: 9, font: poppins, color: BLANC,
       });
 
-      // Ligne fine sous le header
-      page.drawLine({
-        start: { x: 50, y: height - 38 },
-        end: { x: width - 50, y: height - 38 },
-        thickness: 0.3,
-        color: rgb(0.8, 0.8, 0.8)
+      // Titre fiche centré dans le header
+      const ficheIdx = ficheStartPages.findIndex((_, idx) => {
+        const debut = ficheStartPages[idx];
+        const fin = idx + 1 < ficheStartPages.length ? ficheStartPages[idx + 1] : totalPages + 1;
+        return pageNum >= debut && pageNum < fin;
       });
+      if (ficheIdx >= 0) {
+        const t = fiches[ficheIdx].titre;
+        page.drawText(t, {
+          x: width / 2 - poppins.widthOfTextAtSize(t, 9) / 2,
+          y: height - 24, size: 9, font: poppins, color: BLANC,
+        });
+      }
 
       // Footer
-      const pageNumText = `${footerBase} • ${i + 1} sur ${totalPages}`;
-      const footerW = font.widthOfTextAtSize(pageNumText, 7);
-      
-      // Ligne fine au-dessus du footer
       page.drawLine({
-        start: { x: 50, y: 35 },
-        end: { x: width - 50, y: 35 },
-        thickness: 0.3,
-        color: rgb(0.8, 0.8, 0.8)
+        start: { x: 20, y: 20 }, end: { x: width - 20, y: 20 },
+        thickness: 0.5, color: GRIS_CLAIR,
       });
-
-      page.drawText(pageNumText, {
-        x: (width - footerW) / 2,
-        y: 22,
-        size: 7,
-        font: font,
-        color: rgb(0.5, 0.5, 0.5)
+      const numStr = String(pageNum);
+      page.drawText(numStr, {
+        x: width - 20 - poppins.widthOfTextAtSize(numStr, 8),
+        y: 7, size: 8, font: poppins, color: GRIS,
       });
     }
 
-    // ===== ÉTAPE 4: Générer le PDF final =====
-    const pdfBytes = await mergedDoc.save();
-    const pdfBase64 = Buffer.from(pdfBytes).toString('base64');
+    // =============================================
+    // 6. REMPLISSAGE DU SOMMAIRE
+    // =============================================
+    {
+      const { width, height } = sommairePage.getSize();
+      const M = 50;
 
-    return res.status(200).json({
-      success: true,
-      pdf: pdfBase64,
-      totalPages: totalPages,
-      fichesCount: fiches.length
-    });
+      // Titre "Sommaire" en gris foncé
+      sommairePage.drawText('Sommaire', {
+        x: M, y: height - 80,
+        size: 24, font: poppins, color: GRIS,
+      });
 
-  } catch (error) {
-    console.error('Erreur merge-pdf:', error);
-    return res.status(500).json({ 
-      error: 'Erreur lors de la fusion', 
-      details: error.message 
-    });
+      let themeActuel = null;
+      let y = height - 130;
+      const LINE_H = 22;
+      const THEME_H = 30;
+
+      fiches.forEach((fiche, idx) => {
+        if (fiche.theme !== themeActuel) {
+          themeActuel = fiche.theme;
+          if (y < 100) return;
+          // Thème en gris foncé
+          sommairePage.drawText(themeActuel || '', {
+            x: M, y, size: 11, font: poppins, color: GRIS,
+          });
+          y -= THEME_H;
+        }
+
+        if (y < 60) return;
+
+        const titre = fiche.titre || '';
+        const titreCourt = titre.length > 65 ? titre.substring(0, 62) + '…' : titre;
+
+        // Titre fiche en gris foncé
+        sommairePage.drawText(titreCourt, {
+          x: M + 12, y, size: 9.5, font: poppins, color: GRIS,
+        });
+
+        // Pointillés + numéro de page
+        const numPage = String(ficheStartPages[idx]);
+        const numW   = poppins.widthOfTextAtSize(numPage, 9.5);
+        const titreW = poppins.widthOfTextAtSize(titreCourt, 9.5);
+        const dotZone = width - M - numW - (M + 12 + titreW) - 10;
+        if (dotZone > 0) {
+          const dotStr = ' . '.repeat(Math.floor(dotZone / poppins.widthOfTextAtSize(' . ', 9.5)));
+          sommairePage.drawText(dotStr, {
+            x: M + 12 + titreW + 4, y, size: 9.5, font: poppins, color: GRIS_CLAIR,
+          });
+        }
+        sommairePage.drawText(numPage, {
+          x: width - M - numW, y, size: 9.5, font: poppins, color: GRIS,
+        });
+
+        y -= LINE_H;
+      });
+    }
+
+    // =============================================
+    // 7. EXPORT
+    // =============================================
+    const pdfBytes = await finalDoc.save();
+    res.status(200).json({ pdf: Buffer.from(pdfBytes).toString('base64') });
+
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: err.message });
   }
 };
