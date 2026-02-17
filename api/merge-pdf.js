@@ -1,4 +1,5 @@
 const { PDFDocument, rgb, StandardFonts } = require('pdf-lib');
+const fontkit = require('@pdf-lib/fontkit');
 const fs = require('fs');
 const path = require('path');
 
@@ -12,9 +13,6 @@ module.exports = async function handler(req, res) {
 
   try {
     const { matiere, fiches, copyrightPdf } = req.body;
-    // matiere: string (ex: "Droit des personnes")
-    // fiches: [{ titre: string, theme: string, pdf: string (base64) }]
-    // copyrightPdf: string (base64) - PDF de la page copyright
 
     if (!fiches || !fiches.length) {
       return res.status(400).json({ error: 'Aucune fiche fournie' });
@@ -26,16 +24,12 @@ module.exports = async function handler(req, res) {
       const fontPath = path.join(process.cwd(), 'fonts', 'Poppins-SemiBold.ttf');
       poppinsBytes = fs.readFileSync(fontPath);
     } catch (e) {
-      // Fallback: utiliser Helvetica si Poppins introuvable
       poppinsBytes = null;
     }
 
     // ===== ÉTAPE 1: Fusionner copyright + toutes les fiches =====
     const mergedDoc = await PDFDocument.create();
-
-    if (poppinsBytes) {
-      mergedDoc.registerFontkit(require('pdf-lib').fontkit || null);
-    }
+    mergedDoc.registerFontkit(fontkit);
 
     // Ajouter la page copyright
     if (copyrightPdf) {
@@ -73,17 +67,15 @@ module.exports = async function handler(req, res) {
     const totalPages = mergedDoc.getPageCount();
     
     // Charger la police
-    let font, fontBold;
+    let font;
     try {
       if (poppinsBytes) {
         font = await mergedDoc.embedFont(poppinsBytes);
-        fontBold = font; // Poppins SemiBold est déjà semi-gras
       } else {
         throw new Error('fallback');
       }
     } catch (e) {
-      font = await mergedDoc.embedFont(StandardFonts.Helvetica);
-      fontBold = await mergedDoc.embedFont(StandardFonts.HelveticaBold);
+      font = await mergedDoc.embedFont(StandardFonts.HelveticaBold);
     }
 
     // Dessiner le sommaire
@@ -101,12 +93,12 @@ module.exports = async function handler(req, res) {
 
     // Titre du sommaire
     const titleText = 'SOMMAIRE';
-    const titleWidth = fontBold.widthOfTextAtSize(titleText, 22);
+    const titleWidth = font.widthOfTextAtSize(titleText, 22);
     sommairePages[0].drawText(titleText, {
       x: (pageWidth - titleWidth) / 2,
       y: yPos,
       size: 22,
-      font: fontBold,
+      font: font,
       color: rgb(0.1, 0.1, 0.1)
     });
     yPos -= 15;
@@ -139,15 +131,15 @@ module.exports = async function handler(req, res) {
           x: marginLeft,
           y: yPos,
           size: 12,
-          font: fontBold,
-          color: rgb(0.1, 0.4, 0.2) // vert juridique
+          font: font,
+          color: rgb(0, 0.56, 0.32) // vert #009051
         });
         yPos -= 8;
         sommairePages[currentSommairePage].drawLine({
           start: { x: marginLeft, y: yPos },
           end: { x: pageWidth - marginRight, y: yPos },
           thickness: 0.5,
-          color: rgb(0.1, 0.4, 0.2)
+          color: rgb(0, 0.56, 0.32)
         });
         yPos -= 20;
       }
@@ -176,7 +168,7 @@ module.exports = async function handler(req, res) {
         y: yPos,
         size: 10,
         font: font,
-        color: rgb(0.15, 0.15, 0.15)
+        color: rgb(0.1, 0.1, 0.1)
       });
 
       sommairePages[currentSommairePage].drawText(dots, {
@@ -192,7 +184,7 @@ module.exports = async function handler(req, res) {
         y: yPos,
         size: 10,
         font: font,
-        color: rgb(0.15, 0.15, 0.15)
+        color: rgb(0.1, 0.1, 0.1)
       });
 
       yPos -= 22;
