@@ -22,7 +22,6 @@ module.exports = async (req, res) => {
     const NOIR       = rgb(0.10, 0.10, 0.10);
     const GRIS       = rgb(0.29, 0.29, 0.29);
     const GRIS_CLAIR = rgb(0.85, 0.85, 0.85);
-    const BLANC      = rgb(1, 1, 1);
 
     // =============================================
     // 1. COUVERTURE
@@ -68,40 +67,30 @@ module.exports = async (req, res) => {
     const totalPages = finalDoc.getPageCount();
     const premiereFiche = sommaireIdx + 1;
 
+    const annee = new Date().getFullYear();
+
     for (let i = premiereFiche; i < totalPages; i++) {
       const page = finalDoc.getPage(i);
       const { width, height } = page.getSize();
       const pageNum = i + 1;
+      // numéro relatif aux fiches (1-based depuis la première fiche)
+      const pageRel = i - premiereFiche + 1;
+      const pagesTotFiches = totalPages - premiereFiche;
 
-      // Header vert
-      page.drawRectangle({ x: 0, y: height - 36, width, height: 36, color: VERT });
-      page.drawText('Jurible — ' + matiere, {
-        x: 20, y: height - 24, size: 9, font: poppins, color: BLANC,
+      // --- Header : "Fiches de révision • [Matière]" centré ---
+      const headerTxt = 'Fiches de révision • ' + matiere;
+      page.drawText(headerTxt, {
+        x: width / 2 - poppins.widthOfTextAtSize(headerTxt, 9) / 2,
+        y: height - 22,
+        size: 9, font: poppins, color: GRIS,
       });
 
-      // Titre fiche centré dans le header
-      const ficheIdx = ficheStartPages.findIndex((_, idx) => {
-        const debut = ficheStartPages[idx];
-        const fin = idx + 1 < ficheStartPages.length ? ficheStartPages[idx + 1] : totalPages + 1;
-        return pageNum >= debut && pageNum < fin;
-      });
-      if (ficheIdx >= 0) {
-        const t = fiches[ficheIdx].titre;
-        page.drawText(t, {
-          x: width / 2 - poppins.widthOfTextAtSize(t, 9) / 2,
-          y: height - 24, size: 9, font: poppins, color: BLANC,
-        });
-      }
-
-      // Footer
-      page.drawLine({
-        start: { x: 20, y: 20 }, end: { x: width - 20, y: 20 },
-        thickness: 0.5, color: GRIS_CLAIR,
-      });
-      const numStr = String(pageNum);
-      page.drawText(numStr, {
-        x: width - 20 - poppins.widthOfTextAtSize(numStr, 8),
-        y: 7, size: 8, font: poppins, color: GRIS,
+      // --- Footer : "© [année] • Jurible.com – Toute reproduction... • [p] sur [total]" centré ---
+      const footerTxt = '© ' + annee + ' • Jurible.com – Toute reproduction, même partielle, est interdite • ' + pageRel + ' sur ' + pagesTotFiches;
+      page.drawText(footerTxt, {
+        x: width / 2 - poppins.widthOfTextAtSize(footerTxt, 8) / 2,
+        y: 18,
+        size: 8, font: poppins, color: GRIS,
       });
     }
 
