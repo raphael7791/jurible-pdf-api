@@ -125,7 +125,7 @@ module.exports = async (req, res) => {
 
         if (y < 60) return;
 
-        const titre = fiche.titre || '';
+        const titre = 'Fiche n°' + (idx + 1) + ' - ' + (fiche.titre || '');
         const titreCourt = titre.length > 65 ? titre.substring(0, 62) + '…' : titre;
 
         // Titre fiche en gris foncé
